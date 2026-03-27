@@ -1,0 +1,8 @@
+prefix=/home/project26-group3/connect-four/devel/.private/move
+
+Name: move
+Description: Description of move
+Version: 0.0.0
+Cflags: 
+Libs: 
+Requires: 

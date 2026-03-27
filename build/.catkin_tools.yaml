@@ -1,0 +1,6 @@
+devel_space: /home/project26-group3/connect-four/devel
+install: false
+install_space: /home/project26-group3/connect-four/install
+profile: default
+source_space: /home/project26-group3/connect-four/src
+workspace: /home/project26-group3/connect-four
