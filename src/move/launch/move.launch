@@ -1,16 +1,7 @@
 <launch>
-  <!-- Start Sawyer/Intera joint trajectory action server -->
   <node
-    pkg="intera_interface"
-    type="joint_trajectory_action_server.py"
-    name="joint_trajectory_commander"
-    args="-m position"
-    output="screen" />
+    pkg="intera_interface" type="joint_trajectory_action_server.py" name="joint_trajectory_commander" args="-m position"/>
 
-  <!-- Start your Python node -->
   <node
-    pkg="move"
-    type="move.py"
-    name="move"
-    output="screen" />
+    pkg="move" type="move.py" name="move"/>
 </launch>
