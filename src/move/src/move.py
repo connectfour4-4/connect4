@@ -6,10 +6,13 @@ import moveit_msgs.msg
 import geometry_msgs.msg
 import subprocess
 
+from std_msgs.msg import Int8
+
+
 
 moveit_commander.roscpp_initialize(sys.argv)
-rospy.init_node('move_group_python_interface_tutorial',anonymous=True)
-
+rospy.init_node('move_sawyer',anonymous=True)
+rospy.Subscriber('/robot_next_move', Int8, queue_size=1)
 robot = moveit_commander.RobotCommander()
 scene = moveit_commander.PlanningSceneInterface()
 
@@ -27,13 +30,13 @@ while(1):
     if user_input == 0:
         pose_target = geometry_msgs.msg.PoseStamped()
         pose_target.header.frame_id = "base"
-        pose_target.pose.position.x = 0.3690747320652008
-        pose_target.pose.position.y = -0.2617364823818207
-        pose_target.pose.position.z = 0.2822362780570984
-        pose_target.pose.orientation.x = 0.6308044791221619
-        pose_target.pose.orientation.y = 0.7757319808006287
-        pose_target.pose.orientation.z = -0.01561302226036787
-        pose_target.pose.orientation.w = -0.009048229083418846
+        pose_target.pose.position.x = 0.6222648024559021
+        pose_target.pose.position.y = 0.10785019397735596
+        pose_target.pose.position.z = 0.13365104794502258
+        pose_target.pose.orientation.x = 0.6424244046211243
+        pose_target.pose.orientation.y = 0.7651801109313965
+        pose_target.pose.orientation.z = -0.005664573982357979
+        pose_target.pose.orientation.w = 0.04193020984530449
 
         group.set_goal_position_tolerance(0.001)
         group.set_goal_orientation_tolerance(0.001)
@@ -81,6 +84,11 @@ while(1):
 
         group.stop()
         group.clear_pose_targets()
+        rospy.sleep(0.5)
+        subprocess.run(
+            "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 1.0, max_effort: 0.0}'",
+            shell=True
+        )
     
     if user_input == 2:
         pose_target = geometry_msgs.msg.PoseStamped()
@@ -119,6 +127,11 @@ while(1):
 
         group.stop()
         group.clear_pose_targets()
+        rospy.sleep(0.5)
+        subprocess.run(
+            "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 1.0, max_effort: 0.0}'",
+            shell=True
+        )
 
     if user_input == 3:
         pose_target = geometry_msgs.msg.PoseStamped()
@@ -157,6 +170,11 @@ while(1):
 
         group.stop()
         group.clear_pose_targets()
+        rospy.sleep(0.5)
+        subprocess.run(
+            "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 1.0, max_effort: 0.0}'",
+            shell=True
+        )
     if user_input == 4:
         pose_target = geometry_msgs.msg.PoseStamped()
         pose_target.header.frame_id = "base"
@@ -194,6 +212,11 @@ while(1):
 
         group.stop()
         group.clear_pose_targets()
+        rospy.sleep(0.5)
+        subprocess.run(
+            "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 1.0, max_effort: 0.0}'",
+            shell=True
+        )
     if user_input == 5:
         pose_target = geometry_msgs.msg.PoseStamped()
         pose_target.header.frame_id = "base"
@@ -231,6 +254,11 @@ while(1):
 
         group.stop()
         group.clear_pose_targets()
+        rospy.sleep(0.5)
+        subprocess.run(
+            "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 1.0, max_effort: 0.0}'",
+            shell=True
+        )
     if user_input == 6:
         pose_target = geometry_msgs.msg.PoseStamped()
         pose_target.header.frame_id = "base"
@@ -268,6 +296,11 @@ while(1):
 
         group.stop()
         group.clear_pose_targets()
+        rospy.sleep(0.5)
+        subprocess.run(
+            "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 1.0, max_effort: 0.0}'",
+            shell=True
+        )
     if user_input == 7:
         pose_target = geometry_msgs.msg.PoseStamped()
         pose_target.header.frame_id = "base"
@@ -305,7 +338,11 @@ while(1):
 
         group.stop()
         group.clear_pose_targets()
-    
+        rospy.sleep(0.5)
+        subprocess.run(
+                "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 1.0, max_effort: 0.0}'",
+                shell=True
+            )
 
     if user_input == 8:
         pose_target = geometry_msgs.msg.PoseStamped()
