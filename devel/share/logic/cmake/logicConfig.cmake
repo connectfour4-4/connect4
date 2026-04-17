@@ -1,0 +1,1 @@
+/home/project26-group3/connect-four/devel/.private/logic/share/logic/cmake/logicConfig.cmake

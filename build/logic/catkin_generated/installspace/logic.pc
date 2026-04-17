@@ -1,0 +1,8 @@
+prefix=/home/project26-group3/connect-four/install
+
+Name: logic
+Description: Description of logic
+Version: 0.0.0
+Cflags: 
+Libs: 
+Requires: 

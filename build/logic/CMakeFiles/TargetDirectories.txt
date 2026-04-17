@@ -1,0 +1,17 @@
+/home/project26-group3/connect-four/build/logic/CMakeFiles/download_extra_data.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/tests.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/run_tests.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/clean_test_results.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/doxygen.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/std_msgs_generate_messages_cpp.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/std_msgs_generate_messages_eus.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/std_msgs_generate_messages_lisp.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/std_msgs_generate_messages_nodejs.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/std_msgs_generate_messages_py.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/test.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/edit_cache.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/rebuild_cache.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/list_install_components.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/install.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/install/local.dir
+/home/project26-group3/connect-four/build/logic/CMakeFiles/install/strip.dir
