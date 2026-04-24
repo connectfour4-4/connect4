@@ -1,23 +1,6 @@
 #!/usr/bin/env python3
-"""
-vision_node.py (ROS1)
-
-Manual 4-corner calibration version:
-- Click the 4 outer corners of the board in the camera window
-- The node uses those 4 corners as the board quadrilateral
-- Warps the board to a flat view
-- Detects 6x7 slot states:
-    0 = empty, 1 = RED, 2 = BLUE
-- Publishes std_msgs/Int8MultiArray on /board_state
-- Projects the grid + slot overlays back onto the board
-
-Controls:
-- Left click: add corner point
-- r: reset calibration
-- q: quit
-"""
-
 import threading
+from collections import deque
 
 import cv2
 import numpy as np
@@ -33,83 +16,117 @@ WINDOW_NAME = "Connect4 Overlay (R=1, B=2, .=0)"
 
 class VisionNode:
     def __init__(self):
-        rospy.init_node("visualize", anonymous=True)
+        rospy.init_node("visualize_board", anonymous=True)
 
-        # Topic name
         self.image_topic = rospy.get_param("realsense_image", "/camera/color/image_raw")
-
-        # Bridge
         self.bridge = CvBridge()
 
-        # Detection tuning
-        self.px_thresh = int(rospy.get_param("~px_thresh", 45))
-        self.dominance_margin = int(rospy.get_param("~dominance_margin", 8))
+        self.stable_time = float(rospy.get_param("~stable_time", 4.0))
+        self.min_publish_gap = float(rospy.get_param("~min_publish_gap", 2.0))
 
-        # Warped board resolution
-        self.warp_cell_px = int(rospy.get_param("~warp_cell_px", 100))
+        self.vote_frames = int(rospy.get_param("~vote_frames", 30))
+        self.vote_required = int(rospy.get_param("~vote_required", 24))
 
-        # Circular slot sampling
-        self.slot_radius_ratio = float(rospy.get_param("~slot_radius_ratio", 0.28))
-        self.circle_pts = int(rospy.get_param("~circle_pts", 24))
+        self.board_history = deque(maxlen=self.vote_frames)
+        self.last_filtered_board = np.zeros((ROWS, COLS), dtype=np.int8)
 
-        # Overlay
+        self.last_candidate_board = None
+        self.last_candidate_time = None
+        self.last_published_board = None
+        self.last_publish_time = None
+
+        self.px_thresh = int(rospy.get_param("~px_thresh", 180))
+        self.dominance_margin = int(rospy.get_param("~dominance_margin", 90))
+        self.min_ratio = float(rospy.get_param("~min_ratio", 0.08))
+
+        self.warp_cell_px = int(rospy.get_param("~warp_cell_px", 120))
+        self.slot_radius_ratio = float(rospy.get_param("~slot_radius_ratio", 0.30))
+        self.circle_pts = int(rospy.get_param("~circle_pts", 32))
+
         self.alpha_fill = float(rospy.get_param("~alpha_fill", 0.35))
         self.show_rc = bool(rospy.get_param("~show_rc", False))
+        self.flip_board = bool(rospy.get_param("~flip_board", False))
 
-        # HSV thresholds (OpenCV HSV: H 0..179)
-        # RED (two ranges)
-        r1_h_min = int(rospy.get_param("~red1_h_min", 0))
-        r1_h_max = int(rospy.get_param("~red1_h_max", 10))
-        r2_h_min = int(rospy.get_param("~red2_h_min", 170))
-        r2_h_max = int(rospy.get_param("~red2_h_max", 179))
-        r_s_min = int(rospy.get_param("~red_s_min", 80))
-        r_v_min = int(rospy.get_param("~red_v_min", 80))
+        self.blur_kernel = int(rospy.get_param("~blur_kernel", 7))
+        if self.blur_kernel % 2 == 0:
+            self.blur_kernel += 1
 
-        self.lower_red1 = np.array([r1_h_min, r_s_min, r_v_min], dtype=np.uint8)
-        self.upper_red1 = np.array([r1_h_max, 255, 255], dtype=np.uint8)
-        self.lower_red2 = np.array([r2_h_min, r_s_min, r_v_min], dtype=np.uint8)
-        self.upper_red2 = np.array([r2_h_max, 255, 255], dtype=np.uint8)
+        self.lower_red1 = np.array([
+            int(rospy.get_param("~red1_h_min", 0)),
+            int(rospy.get_param("~red_s_min", 100)),
+            int(rospy.get_param("~red_v_min", 80))
+        ], dtype=np.uint8)
 
-        # BLUE
-        b_h_min = int(rospy.get_param("~blue_h_min", 95))
-        b_h_max = int(rospy.get_param("~blue_h_max", 130))
-        b_s_min = int(rospy.get_param("~blue_s_min", 80))
-        b_v_min = int(rospy.get_param("~blue_v_min", 80))
+        self.upper_red1 = np.array([
+            int(rospy.get_param("~red1_h_max", 12)),
+            255,
+            255
+        ], dtype=np.uint8)
 
-        self.lower_blue = np.array([b_h_min, b_s_min, b_v_min], dtype=np.uint8)
-        self.upper_blue = np.array([b_h_max, 255, 255], dtype=np.uint8)
+        self.lower_red2 = np.array([
+            int(rospy.get_param("~red2_h_min", 168)),
+            int(rospy.get_param("~red_s_min", 100)),
+            int(rospy.get_param("~red_v_min", 80))
+        ], dtype=np.uint8)
 
-        # Morphology kernel
-        self.kernel = np.ones((3, 3), np.uint8)
+        self.upper_red2 = np.array([
+            int(rospy.get_param("~red2_h_max", 179)),
+            255,
+            255
+        ], dtype=np.uint8)
 
-        # Thread-safe shared state
+        self.lower_blue = np.array([
+            int(rospy.get_param("~blue_h_min", 90)),
+            int(rospy.get_param("~blue_s_min", 100)),
+            int(rospy.get_param("~blue_v_min", 70))
+        ], dtype=np.uint8)
+
+        self.upper_blue = np.array([
+            int(rospy.get_param("~blue_h_max", 135)),
+            255,
+            255
+        ], dtype=np.uint8)
+
+        self.kernel = np.ones((5, 5), np.uint8)
+
         self.frame_lock = threading.Lock()
         self.state_lock = threading.Lock()
         self.latest_overlay = None
 
-        # Manual calibration state
         self.click_points = []
         self.board_quad = self.load_corners_from_param()
 
-        # Publisher
         self.pub = rospy.Publisher("/board_state", Int8MultiArray, queue_size=1)
 
-        # UI (created in main thread)
         cv2.namedWindow(WINDOW_NAME)
         cv2.setMouseCallback(WINDOW_NAME, self.on_mouse)
 
         rospy.on_shutdown(self.on_shutdown)
 
-        # Subscriber LAST, after all callback-used attributes exist
-        self.sub = rospy.Subscriber(self.image_topic, Image, self.image_callback, queue_size=1)
+        self.sub = rospy.Subscriber(
+            self.image_topic,
+            Image,
+            self.image_callback,
+            queue_size=1,
+            buff_size=2**24
+        )
 
         rospy.loginfo(f"[vision_node] Subscribed to: {self.image_topic}")
-        rospy.loginfo("[vision_node] Publishing: /board_state (0 empty, 1 red, 2 blue)")
+        rospy.loginfo("[vision_node] Stable RealSense detection enabled.")
+
         if self.board_quad is None:
-            rospy.loginfo("[vision_node] Click the 4 board corners to calibrate.")
+            rospy.loginfo("[vision_node] Click the 4 OUTER board corners.")
         else:
             rospy.loginfo("[vision_node] Loaded board corners from ~board_corners.")
-        rospy.loginfo("[vision_node] Press 'r' to recalibrate, 'q' to quit.")
+
+    def terminal_log_board(self, title, board):
+        msg = (
+            f"\n================ {title} ================\n"
+            f"{board}\n"
+            f"=========================================\n"
+        )
+        print(msg, flush=True)
+        rospy.loginfo(msg)
 
     def on_shutdown(self):
         try:
@@ -118,34 +135,25 @@ class VisionNode:
             pass
 
     def load_corners_from_param(self):
-        """
-        Optional ROS param:
-        ~board_corners:
-          - [x1, y1]
-          - [x2, y2]
-          - [x3, y3]
-          - [x4, y4]
-        or flat list [x1,y1,x2,y2,x3,y3,x4,y4]
-        """
         corners = rospy.get_param("~board_corners", None)
+
         if corners is None:
             return None
 
-        pts = None
         try:
             arr = np.array(corners, dtype=np.float32)
+
             if arr.shape == (4, 2):
-                pts = arr
-            elif arr.shape == (8,):
-                pts = arr.reshape(4, 2)
+                return self.order_points(arr)
+
+            if arr.shape == (8,):
+                return self.order_points(arr.reshape(4, 2))
+
         except Exception:
-            pts = None
+            pass
 
-        if pts is None:
-            rospy.logwarn("[vision_node] Invalid ~board_corners format. Ignoring.")
-            return None
-
-        return self.order_points(pts)
+        rospy.logwarn("[vision_node] Invalid ~board_corners format.")
+        return None
 
     def on_mouse(self, event, x, y, flags, param):
         if event != cv2.EVENT_LBUTTONDOWN:
@@ -162,31 +170,137 @@ class VisionNode:
             if len(self.click_points) == 4:
                 pts = np.array(self.click_points, dtype=np.float32)
                 self.board_quad = self.order_points(pts)
-                flat = self.board_quad.reshape(-1).astype(int).tolist()
-                rospy.loginfo("[vision_node] Calibration complete.")
-                rospy.loginfo(f"[vision_node] Save these corners as ~board_corners: {flat}")
 
-    def image_callback(self, msg: Image):
+                flat = self.board_quad.reshape(-1).astype(int).tolist()
+
+                self.board_history.clear()
+                self.last_filtered_board = np.zeros((ROWS, COLS), dtype=np.int8)
+                self.last_candidate_board = None
+                self.last_candidate_time = None
+                self.last_published_board = None
+                self.last_publish_time = None
+
+                rospy.loginfo("[vision_node] Calibration complete.")
+                rospy.loginfo(f"[vision_node] Save corners as ~board_corners: {flat}")
+
+    def image_callback(self, msg):
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         except Exception as e:
-            rospy.logerr(f"CV Bridge error: {e}")
+            rospy.logerr(f"[vision_node] CV Bridge error: {e}")
             return
 
         board, overlay_frame = self.detect_board_and_overlay(frame)
 
+        with self.state_lock:
+            calibrated = self.board_quad is not None
+
+        if calibrated:
+            if self.flip_board:
+                board = np.flipud(board)
+
+            filtered_board = self.filter_board_with_votes(board)
+
+            if filtered_board is not None:
+                self.update_stable_board(filtered_board)
+
+        with self.frame_lock:
+            self.latest_overlay = overlay_frame.copy()
+
+    def filter_board_with_votes(self, board):
+        self.board_history.append(board.copy())
+
+        if len(self.board_history) < self.vote_frames:
+            return None
+
+        stack = np.stack(list(self.board_history), axis=0)
+        filtered = self.last_filtered_board.copy()
+
+        for r in range(ROWS):
+            for c in range(COLS):
+                values = stack[:, r, c]
+                counts = np.bincount(values.astype(np.int32), minlength=3)
+
+                best_value = int(np.argmax(counts))
+                best_count = int(counts[best_value])
+
+                if best_count >= self.vote_required:
+                    filtered[r, c] = best_value
+
+        if not self.is_gravity_valid(filtered):
+            rospy.logwarn_throttle(
+                1.0,
+                "[vision_node] Rejected unstable board: invalid gravity."
+            )
+            return None
+
+        self.last_filtered_board = filtered.copy()
+        return filtered
+
+    def is_gravity_valid(self, board):
+        for c in range(COLS):
+            seen_empty = False
+
+            for r in range(ROWS - 1, -1, -1):
+                if board[r, c] == 0:
+                    seen_empty = True
+                elif seen_empty:
+                    return False
+
+        return True
+
+    def update_stable_board(self, board):
+        now = rospy.Time.now()
+
+        if self.last_candidate_board is None:
+            self.last_candidate_board = board.copy()
+            self.last_candidate_time = now
+            rospy.loginfo("[vision_node] First candidate board detected. Waiting for stability.")
+            return
+
+        if not np.array_equal(board, self.last_candidate_board):
+            self.last_candidate_board = board.copy()
+            self.last_candidate_time = now
+            rospy.loginfo("[vision_node] Board changed. Waiting for stable board...")
+            return
+
+        stable_duration = (now - self.last_candidate_time).to_sec()
+
+        if stable_duration < self.stable_time:
+            return
+
+        is_new_board = (
+            self.last_published_board is None or
+            not np.array_equal(board, self.last_published_board)
+        )
+
+        if self.last_publish_time is not None:
+            if (now - self.last_publish_time).to_sec() < self.min_publish_gap:
+                return
+
+        if is_new_board:
+            self.terminal_log_board("VISION: NEW STABLE BOARD DETECTED", board)
+        else:
+            rospy.loginfo("[vision_node] Stable board unchanged. Republishing /board_state.")
+
+        self.publish_board(board)
+
+        self.last_published_board = board.copy()
+        self.last_publish_time = now
+
+    def publish_board(self, board):
         msg_out = Int8MultiArray()
+
         msg_out.layout.dim = [
             MultiArrayDimension(label="rows", size=ROWS, stride=ROWS * COLS),
             MultiArrayDimension(label="cols", size=COLS, stride=COLS),
         ]
+
         msg_out.layout.data_offset = 0
         msg_out.data = board.flatten().astype(np.int8).tolist()
-        self.pub.publish(msg_out)
 
-        # Store latest frame for UI thread
-        with self.frame_lock:
-            self.latest_overlay = overlay_frame.copy()
+        self.pub.publish(msg_out)
+        rospy.loginfo("[vision_node] Published stable board to /board_state.")
 
     def run_ui(self):
         rate = rospy.Rate(60)
@@ -202,38 +316,50 @@ class VisionNode:
                 cv2.imshow(WINDOW_NAME, frame_to_show)
 
             key = cv2.waitKey(1) & 0xFF
+
             if key == ord("q"):
                 rospy.signal_shutdown("User pressed q")
                 break
+
             elif key == ord("r"):
                 with self.state_lock:
                     self.board_quad = None
                     self.click_points = []
+
+                self.board_history.clear()
+                self.last_filtered_board = np.zeros((ROWS, COLS), dtype=np.int8)
+                self.last_candidate_board = None
+                self.last_candidate_time = None
+                self.last_published_board = None
+                self.last_publish_time = None
+
                 rospy.loginfo("[vision_node] Calibration reset. Click 4 corners again.")
 
             rate.sleep()
 
     def order_points(self, pts):
-        """Return points as top-left, top-right, bottom-right, bottom-left."""
         pts = np.asarray(pts, dtype=np.float32)
+
         rect = np.zeros((4, 2), dtype=np.float32)
 
         s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)]   # top-left
-        rect[2] = pts[np.argmax(s)]   # bottom-right
+        rect[0] = pts[np.argmin(s)]
+        rect[2] = pts[np.argmax(s)]
 
         diff = np.diff(pts, axis=1).reshape(-1)
-        rect[1] = pts[np.argmin(diff)]  # top-right
-        rect[3] = pts[np.argmax(diff)]  # bottom-left
+        rect[1] = pts[np.argmin(diff)]
+        rect[3] = pts[np.argmax(diff)]
 
         return rect
 
     def make_circle_polygon(self, cx, cy, radius, n_pts):
         angles = np.linspace(0, 2.0 * np.pi, n_pts, endpoint=False)
+
         pts = np.stack(
             [cx + radius * np.cos(angles), cy + radius * np.sin(angles)],
             axis=1
         ).astype(np.float32)
+
         return pts
 
     def draw_calibration_view(self, frame):
@@ -244,25 +370,49 @@ class VisionNode:
 
         for i, p in enumerate(points):
             x, y = int(p[0]), int(p[1])
+
             cv2.circle(out, (x, y), 5, (0, 255, 255), -1)
-            cv2.putText(out, str(i + 1), (x + 8, y - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+            cv2.putText(
+                out,
+                str(i + 1),
+                (x + 8, y - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 255),
+                2
+            )
 
         if len(points) >= 2:
             pts = np.array(points, dtype=np.int32)
             cv2.polylines(out, [pts], False, (0, 255, 255), 2)
 
-        cv2.putText(out, "Click 4 board corners", (10, 25),
+        cv2.putText(out, "Click 4 OUTER board corners", (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
         cv2.putText(out, "Suggested: TL, TR, BR, BL", (10, 55),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
         cv2.putText(out, "Press r to reset, q to quit", (10, 85),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
         return out
 
+    def clean_mask(self, mask):
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel, iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel, iterations=2)
+        return mask
+
     def detect_cells_on_warped(self, warped_bgr):
+        if self.blur_kernel > 1:
+            warped_bgr = cv2.GaussianBlur(
+                warped_bgr,
+                (self.blur_kernel, self.blur_kernel),
+                0
+            )
+
         hsv = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2HSV)
+
         warp_h, warp_w = warped_bgr.shape[:2]
 
         cell_h = warp_h // ROWS
@@ -279,36 +429,58 @@ class VisionNode:
                 x2 = (c + 1) * cell_w
 
                 roi = hsv[y1:y2, x1:x2]
+
                 roi_h, roi_w = roi.shape[:2]
 
                 circle_mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
+
                 radius = max(1, int(min(roi_w, roi_h) * self.slot_radius_ratio))
+
                 cx_local = roi_w // 2
                 cy_local = roi_h // 2
+
                 cv2.circle(circle_mask, (cx_local, cy_local), radius, 255, -1)
+
+                valid_area = cv2.countNonZero(circle_mask)
+                if valid_area <= 0:
+                    continue
 
                 mask_red1 = cv2.inRange(roi, self.lower_red1, self.upper_red1)
                 mask_red2 = cv2.inRange(roi, self.lower_red2, self.upper_red2)
                 mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+
                 mask_blue = cv2.inRange(roi, self.lower_blue, self.upper_blue)
 
                 mask_red = cv2.bitwise_and(mask_red, circle_mask)
                 mask_blue = cv2.bitwise_and(mask_blue, circle_mask)
 
-                mask_red = cv2.morphologyEx(mask_red, cv2.MORPH_OPEN, self.kernel, iterations=1)
-                mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_OPEN, self.kernel, iterations=1)
+                mask_red = self.clean_mask(mask_red)
+                mask_blue = self.clean_mask(mask_blue)
 
                 red_px = cv2.countNonZero(mask_red)
                 blue_px = cv2.countNonZero(mask_blue)
 
-                if red_px > self.px_thresh and red_px > (blue_px + self.dominance_margin):
+                red_ratio = red_px / float(valid_area)
+                blue_ratio = blue_px / float(valid_area)
+
+                if (
+                    red_px > self.px_thresh and
+                    red_ratio > self.min_ratio and
+                    red_px > blue_px + self.dominance_margin
+                ):
                     state = 1
                     fill_bgr = (0, 0, 255)
                     text = "R"
-                elif blue_px > self.px_thresh and blue_px > (red_px + self.dominance_margin):
+
+                elif (
+                    blue_px > self.px_thresh and
+                    blue_ratio > self.min_ratio and
+                    blue_px > red_px + self.dominance_margin
+                ):
                     state = 2
                     fill_bgr = (255, 0, 0)
                     text = "B"
+
                 else:
                     state = 0
                     fill_bgr = (70, 70, 70)
@@ -328,7 +500,13 @@ class VisionNode:
 
                 cx_global = x1 + (cell_w / 2.0)
                 cy_global = y1 + (cell_h / 2.0)
-                slot_poly = self.make_circle_polygon(cx_global, cy_global, radius, self.circle_pts)
+
+                slot_poly = self.make_circle_polygon(
+                    cx_global,
+                    cy_global,
+                    radius,
+                    self.circle_pts
+                )
 
                 cell_visuals.append(
                     {
@@ -369,6 +547,7 @@ class VisionNode:
         M_inv = cv2.getPerspectiveTransform(dst_quad, quad)
 
         warped = cv2.warpPerspective(frame, M, (warp_w, warp_h))
+
         board, cell_visuals = self.detect_cells_on_warped(warped)
 
         overlay = frame.copy()
@@ -409,19 +588,38 @@ class VisionNode:
             cv2.polylines(out, [vis["slot_poly"]], True, (255, 255, 255), 1)
 
             cx, cy = vis["center"]
-            cv2.putText(out, vis["text"], (cx - 10, cy + 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+            cv2.putText(
+                out,
+                vis["text"],
+                (cx - 10, cy + 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2
+            )
 
             if self.show_rc:
                 anchor = vis["cell_poly"][0]
-                cv2.putText(out, f"{vis['r']},{vis['c']}",
-                            (int(anchor[0]) + 4, int(anchor[1]) + 16),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
-        cv2.putText(out, "Overlay: R=1 (red), B=2 (blue), .=0 (empty)",
+                cv2.putText(
+                    out,
+                    f"{vis['r']},{vis['c']}",
+                    (int(anchor[0]) + 4, int(anchor[1]) + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (255, 255, 255),
+                    1
+                )
+
+        cv2.putText(out, "Stable mode: voting + continuous publish",
                     (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(out, "Press r to recalibrate, q to quit",
+
+        cv2.putText(out, "R=1 red, B=2 blue, .=0 empty",
                     (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+
+        cv2.putText(out, "Press r to recalibrate, q to quit",
+                    (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
 
         return board, out
 
