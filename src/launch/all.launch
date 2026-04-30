@@ -1,9 +1,9 @@
 <launch>
     
     <include file= "$(find realsense2_camera)/launch/rs_camera.launch"/>
-
+    <node pkg = "move" type = "camera_collide.py" name = "collision" output = "screen"/>
     <node pkg="intera_interface" type="joint_trajectory_action_server.py" name="joint_trajectory_commander" args="-m position"/>
-    <node pkg = "vision" type = "vision.py" name = "visualize_board"/>
-    <node pkg = "logic" type = "logic.py" name= "game_logic"/>
+    <node pkg = "vision" type = "visionT.py" name = "visualize_board"/>
+    <node pkg = "logic" type = "logic.py" name= "game_logic" output = "screen"/>
     <node pkg = "move" type ="move.py" name = "move_sawyer"/>
 </launch>

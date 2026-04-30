@@ -1,4 +1,4 @@
 <launch>
   <node pkg="intera_interface" type="joint_trajectory_action_server.py" name="joint_trajectory_commander" args="-m position"/>
-  <node pkg="move" type="move.py" name="move"/>
+  <node pkg="move" type="calibration.py" name="move"/>
 </launch>
