@@ -4,7 +4,7 @@ import rospy
 import numpy as np
 import threading
 import time
-from std_msgs.msg import Int8MultiArray, Int8
+from std_msgs.msg import Int8MultiArray, Int8, String
 
 ROWS = 6
 COLS = 7
@@ -29,6 +29,9 @@ class GameLogic:
 
         self.next_move_topic = rospy.get_param("~next_move_topic", "/robot_next_move")
 
+        # Sawyer speech topic
+        self.say_topic = rospy.get_param("~say_topic", "/say")
+
         self.board = np.zeros((ROWS, COLS), dtype=np.int8)
         self.have_board = False
 
@@ -50,6 +53,7 @@ class GameLogic:
         self.transposition_table = {}
 
         self.next_move_pub = rospy.Publisher(self.next_move_topic, Int8, queue_size=1)
+        self.say_pub = rospy.Publisher(self.say_topic, String, queue_size=1)
 
         rospy.Subscriber("/board_state", Int8MultiArray, self.board_callback, queue_size=1)
 
@@ -60,9 +64,14 @@ class GameLogic:
         rospy.loginfo("[connect4_game_logic] Node ready.")
         rospy.loginfo("[connect4_game_logic] Waiting for /board_state from vision.")
         rospy.loginfo(f"[connect4_game_logic] Publishing robot move on: {self.next_move_topic}")
+        rospy.loginfo(f"[connect4_game_logic] Publishing Sawyer speech on: {self.say_topic}")
         rospy.loginfo(f"[connect4_game_logic] AI search depth: {self.depth}")
         rospy.loginfo(f"[connect4_game_logic] auto_detect_flip={self.auto_detect_flip}")
         rospy.loginfo(f"[connect4_game_logic] flip_board tie-breaker={self.flip_board}")
+
+    def say(self, text):
+        rospy.loginfo(f"[connect4_game_logic] SAY: {text}")
+        self.say_pub.publish(String(data=text))
 
     def keyboard_loop(self):
         while not rospy.is_shutdown():
@@ -98,6 +107,8 @@ class GameLogic:
             "Please clear the physical board.\n"
             "Waiting for vision to publish an empty board."
         )
+
+        self.say("Please clear the board. I am ready for a new game.")
 
     def terminal_log(self, title, text=""):
         msg = (
@@ -140,6 +151,7 @@ class GameLogic:
                 "GAME OVER: YOU WIN",
                 "Human / BLUE wins.\nRobot / RED loses."
             )
+            self.say("You win. Good game.")
 
         elif winner == ROBOT:
             self.robot_wins += 1
@@ -147,6 +159,7 @@ class GameLogic:
                 "GAME OVER: YOU LOSE",
                 "Robot / RED wins.\nHuman / BLUE loses."
             )
+            self.say("I win. Good game.")
 
         else:
             self.draws += 1
@@ -154,6 +167,7 @@ class GameLogic:
                 "GAME OVER: DRAW",
                 "The board is full. No winner."
             )
+            self.say("It is a draw. Good game.")
 
         self.terminal_log_scoreboard()
 
@@ -188,6 +202,8 @@ class GameLogic:
                     "NEW GAME STARTED",
                     "Empty board detected.\nGame logic is ready."
                 )
+
+                self.say("New game started.")
 
                 self.handle_position()
             else:
@@ -493,10 +509,15 @@ class GameLogic:
             elapsed = (now - self.last_human_wait_time).to_sec()
 
             if elapsed >= self.human_reminder_gap:
+                hurry_text = f"It has been {int(elapsed)} seconds. Please make your move."
+
                 self.terminal_log(
                     "LOGIC: HURRY UP",
-                    f"It has been {int(elapsed)} seconds. Please make your move."
+                    hurry_text
                 )
+
+                self.say("Please make your move.")
+
                 self.last_human_wait_time = now
             else:
                 rospy.loginfo_throttle(
