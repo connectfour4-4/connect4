@@ -4,10 +4,8 @@ import rospy
 import moveit_commander
 import moveit_msgs.msg
 import geometry_msgs.msg
-import control_msgs.msg
 from control_msgs.msg import GripperCommand
 from std_msgs.msg import Bool
-import subprocess
 
 from std_msgs.msg import Int8
 
@@ -21,6 +19,12 @@ group_name = "arm"
 group = moveit_commander.MoveGroupCommander(group_name)
 
 move_done_pub = rospy.Publisher("/robot/move_done", Bool, queue_size=10)
+gripper_pub = rospy.Publisher("/robot/gripper/command", GripperCommand, queue_size=10)
+
+MOVE_SETTLE_TIME = 0.5
+FINAL_SETTLE_TIME = 0.5
+PICK_GRIPPER_WAIT_TIME = 1.0
+GRIPPER_SETTLE_TIME = 0.25
 
 
 def move (px, py, pz, ox, oy, oz, ow):
@@ -42,32 +46,49 @@ def move (px, py, pz, ox, oy, oz, ow):
 
     group.stop()
     group.clear_pose_targets()
-    rospy.sleep(0.5)
+    rospy.sleep(MOVE_SETTLE_TIME)
+
+
+def command_gripper(position, max_effort=0.0):
+    command = GripperCommand()
+    command.position = position
+    command.max_effort = max_effort
+
+    deadline = rospy.Time.now() + rospy.Duration(2.0)
+    while gripper_pub.get_num_connections() == 0 and rospy.Time.now() < deadline:
+        rospy.sleep(0.05)
+
+    if gripper_pub.get_num_connections() == 0:
+        rospy.logwarn("[move_sawyer] Publishing gripper command with no active subscribers.")
+
+    gripper_pub.publish(command)
+    rospy.sleep(GRIPPER_SETTLE_TIME)
 
 
 def pnp(target_1, target_2):
+    rospy.loginfo("[move_sawyer] Starting pick-and-place.")
+    #code below moves the robot to the feeder to pick up the token
     move(*col8_1)
     move(*col8_2)
 
-    subprocess.run(
-        "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 0.0, max_effort: 0.0}'",
-        shell=True
-    )
+    rospy.loginfo(f"[move_sawyer] Waiting {PICK_GRIPPER_WAIT_TIME:.1f} seconds before closing gripper.")
+    rospy.sleep(PICK_GRIPPER_WAIT_TIME)
 
+    command_gripper(0.0)
+    #Then moves it back up
     move(*col8_1)
+    #moves home
     move(*home)
-
+    #move to the specified target column
     move(*target_1)
     move(*target_2)
 
-    subprocess.run(
-        "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand '{position: 1.0, max_effort: 0.0}'",
-        shell=True
-    )
+    command_gripper(1.0)
 
     move(*home)
-    rospy.sleep(0.5)
+    rospy.sleep(FINAL_SETTLE_TIME)
     move_done_pub.publish(True)
+    rospy.loginfo("[move_sawyer] Pick-and-place complete. Published /robot/move_done=True.")
 
 
 home = [0.6222648024559021, 0.10785019397735596, 0.13365104794502258,
@@ -83,6 +104,11 @@ col8_2 = [0.5995640754699707, -0.2726421058177948, -0.15186838805675507,
 def robot_next_move_callback(msg):
     user_input = msg.data
     print(user_input)
+
+    if user_input not in range(1, 8):
+        rospy.logwarn(f"[move_sawyer] Invalid robot column command: {user_input}")
+        move_done_pub.publish(False)
+        return
 
     if user_input == 7:
         col1_1 = [0.7659575343132019, -0.01928199827671051, 0.014277258887887001,

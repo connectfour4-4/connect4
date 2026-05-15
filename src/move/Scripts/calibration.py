@@ -4,8 +4,8 @@ import sys
 import rospy
 import moveit_commander
 import geometry_msgs.msg
-import subprocess
 
+from control_msgs.msg import GripperCommand
 from std_msgs.msg import Int8
 
 moveit_commander.roscpp_initialize(sys.argv)
@@ -16,6 +16,7 @@ scene = moveit_commander.PlanningSceneInterface()
 
 group_name = "arm_local"
 group = moveit_commander.MoveGroupCommander(group_name)
+gripper_pub = rospy.Publisher("/robot/gripper/command", GripperCommand, queue_size=10)
 
 is_moving = False
 
@@ -181,22 +182,23 @@ def move(px, py, pz, ox, oy, oz, ow):
     return success
 
 
+def command_gripper(position, max_effort=0.0):
+    command = GripperCommand()
+    command.position = position
+    command.max_effort = max_effort
+
+    gripper_pub.publish(command)
+    rospy.sleep(0.25)
+
+
 def close_gripper():
     terminal_log("MOVE NODE: CLOSING GRIPPER", "Closing gripper to pick piece.")
-    subprocess.run(
-        "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand "
-        "'{position: 0.0, max_effort: 0.0}'",
-        shell=True
-    )
+    command_gripper(0.0)
 
 
 def open_gripper():
     terminal_log("MOVE NODE: OPENING GRIPPER", "Opening gripper to release piece.")
-    subprocess.run(
-        "rostopic pub -1 /robot/gripper/command control_msgs/GripperCommand "
-        "'{position: 1.0, max_effort: 0.0}'",
-        shell=True
-    )
+    command_gripper(1.0)
 
 
 def pnp(target_1, target_2, selected_col):

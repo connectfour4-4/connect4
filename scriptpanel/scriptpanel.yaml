@@ -1,0 +1,37 @@
+config:
+  num_buttons_per_row: 3
+  button_width: 150
+  button_height: 70
+  font: LiberationMono:Bold
+scripts:
+  - label: Start
+    script: start.sh
+    terminal: True
+    group: Connect Four
+    tooltip: |
+      Launch all.launch and begin the Connect Four game.
+  - label: Column 1
+    script: column-1.sh
+    group: Connect Four
+    tooltip: Move the robot to column 1.
+  - label: Column 4
+    script: column-4.sh
+    group: Connect Four
+    tooltip: Move the robot to column 4.
+  - label: Column 7
+    script: column-7.sh
+    group: Connect Four
+    tooltip: Move the robot to column 7.
+  - label: Pick
+    script: pick.sh
+    group: Connect Four
+    tooltip: |
+      Move down to the pick pose, wait, close the gripper, and move back up.
+  - label: Open Gripper
+    script: open-gripper.sh
+    group: Connect Four
+    tooltip: Open the gripper.
+  - label: Close Gripper
+    script: close-gripper.sh
+    group: Connect Four
+    tooltip: Close the gripper.

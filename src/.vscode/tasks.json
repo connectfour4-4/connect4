@@ -1,0 +1,37 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start",
+      "type": "shell",
+      "command": "bash scripts/panel/start_game.sh",
+      "group": "build",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Column 1",
+      "type": "shell",
+      "command": "bash scripts/panel/robot_column.sh 1",
+      "problemMatcher": []
+    },
+    {
+      "label": "Column 4",
+      "type": "shell",
+      "command": "bash scripts/panel/robot_column.sh 4",
+      "problemMatcher": []
+    },
+    {
+      "label": "Column 7",
+      "type": "shell",
+      "command": "bash scripts/panel/robot_column.sh 7",
+      "problemMatcher": []
+    },
+    {
+      "label": "Pick",
+      "type": "shell",
+      "command": "bash scripts/panel/robot_pick.sh",
+      "problemMatcher": []
+    }
+  ]
+}

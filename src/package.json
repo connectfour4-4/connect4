@@ -1,0 +1,11 @@
+{
+  "name": "connect-four-robot-panel",
+  "private": true,
+  "scripts": {
+    "Start": "bash scripts/panel/start_game.sh",
+    "Column 1": "bash scripts/panel/robot_column.sh 1",
+    "Column 4": "bash scripts/panel/robot_column.sh 4",
+    "Column 7": "bash scripts/panel/robot_column.sh 7",
+    "Pick": "bash scripts/panel/robot_pick.sh"
+  }
+}

@@ -4,7 +4,7 @@ import rospy
 import numpy as np
 import threading
 import time
-from std_msgs.msg import Int8MultiArray, Int8, String
+from std_msgs.msg import Bool, Int8MultiArray, Int8, String
 import random
 
 ROWS = 6
@@ -34,12 +34,17 @@ class GameLogic:
 
         self.next_move_topic = rospy.get_param("~next_move_topic", "/robot_next_move")
         self.say_topic = rospy.get_param("~say_topic", "/say")
+        self.move_done_topic = rospy.get_param("~move_done_topic", "/robot/move_done")
+        self.robot_feedback_timeout = float(rospy.get_param("~robot_feedback_timeout", 5.0))
 
         self.board = np.zeros((ROWS, COLS), dtype=np.int8)
         self.have_board = False
 
         self.robot_command_pending = False
         self.pending_robot_col = None
+        self.robot_motion_done = False
+        self.robot_feedback_wait_start = None
+        self.robot_feedback_timeout_spoken = False
 
         self.game_over = False
         self.waiting_for_enter = False
@@ -59,6 +64,8 @@ class GameLogic:
         self.say_pub = rospy.Publisher(self.say_topic, String, queue_size=1)
 
         rospy.Subscriber("/board_state", Int8MultiArray, self.board_callback, queue_size=1)
+        rospy.Subscriber(self.move_done_topic, Bool, self.move_done_callback, queue_size=1)
+        rospy.Timer(rospy.Duration(0.5), self.robot_feedback_timer_callback)
 
         self.keyboard_thread = threading.Thread(target=self.keyboard_loop)
         self.keyboard_thread.daemon = True
@@ -68,6 +75,7 @@ class GameLogic:
         rospy.loginfo("[connect4_game_logic] Waiting for /board_state from vision.")
         rospy.loginfo(f"[connect4_game_logic] Publishing robot move on: {self.next_move_topic}")
         rospy.loginfo(f"[connect4_game_logic] Publishing Sawyer speech on: {self.say_topic}")
+        rospy.loginfo(f"[connect4_game_logic] Listening for robot motion feedback on: {self.move_done_topic}")
         rospy.loginfo(f"[connect4_game_logic] AI search depth: {self.depth}")
         rospy.loginfo(f"[connect4_game_logic] auto_detect_flip={self.auto_detect_flip}")
         rospy.loginfo(f"[connect4_game_logic] flip_board tie-breaker={self.flip_board}")
@@ -91,6 +99,25 @@ class GameLogic:
         rospy.loginfo(f"[connect4_game_logic] SAY: {text}")
         self.say_pub.publish(String(data=text))
 
+    def move_done_callback(self, msg):
+        if not self.robot_command_pending:
+            return
+
+        self.robot_motion_done = True
+        self.robot_feedback_wait_start = rospy.Time.now()
+        self.robot_feedback_timeout_spoken = False
+
+        feedback = "completed" if msg.data else "reported a failure"
+        self.terminal_log(
+            "LOGIC: ROBOT MOTION DONE",
+            f"Move node {feedback}.\n"
+            "Waiting for vision feedback that the red piece was inserted."
+        )
+
+    def robot_feedback_timer_callback(self, _event):
+        if self.robot_command_pending:
+            self.check_robot_feedback_timeout()
+
     def keyboard_loop(self):
         while not rospy.is_shutdown():
             if self.waiting_for_enter:
@@ -111,6 +138,9 @@ class GameLogic:
 
         self.robot_command_pending = False
         self.pending_robot_col = None
+        self.robot_motion_done = False
+        self.robot_feedback_wait_start = None
+        self.robot_feedback_timeout_spoken = False
 
         self.game_over = False
         self.waiting_for_enter = False
@@ -298,6 +328,9 @@ class GameLogic:
                 )
                 self.robot_command_pending = False
                 self.pending_robot_col = None
+                self.robot_motion_done = False
+                self.robot_feedback_wait_start = None
+                self.robot_feedback_timeout_spoken = False
             else:
                 rospy.loginfo_throttle(
                     1.0,
@@ -513,6 +546,7 @@ class GameLogic:
             return
 
         if self.robot_command_pending:
+            self.check_robot_feedback_timeout()
             rospy.loginfo_throttle(
                 1.0,
                 "[connect4_game_logic] Robot move already sent. Waiting for vision confirmation."
@@ -595,6 +629,43 @@ class GameLogic:
 
         self.robot_command_pending = True
         self.pending_robot_col = col_zero_based
+        self.robot_motion_done = False
+        self.robot_feedback_wait_start = None
+        self.robot_feedback_timeout_spoken = False
+
+    def check_robot_feedback_timeout(self):
+        if not self.robot_motion_done:
+            rospy.loginfo_throttle(
+                1.0,
+                "[connect4_game_logic] Waiting for robot motion to finish before checking vision feedback."
+            )
+            return
+
+        if self.robot_feedback_wait_start is None:
+            self.robot_feedback_wait_start = rospy.Time.now()
+            return
+
+        elapsed = (rospy.Time.now() - self.robot_feedback_wait_start).to_sec()
+
+        if elapsed < self.robot_feedback_timeout or self.robot_feedback_timeout_spoken:
+            return
+
+        col_text = ""
+        if self.pending_robot_col is not None:
+            col_text = f" Please put the piece at {self.pending_robot_col + 1} from my side."
+
+        message = (
+            "I was not able to insert the piece. "
+            "Could you please do it for me?"
+            f"{col_text}"
+        )
+
+        self.terminal_log(
+            "LOGIC: ROBOT INSERT FEEDBACK TIMEOUT",
+            f"No red piece was confirmed by vision after {elapsed:.1f} seconds."
+        )
+        self.say(message)
+        self.robot_feedback_timeout_spoken = True
 
     def choose_best_robot_move(self, board):
         valid = self.valid_moves(board)

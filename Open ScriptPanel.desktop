@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Open ScriptPanel
+Comment=Open the Connect Four ScriptPanel
+Exec=python3 /home/project26-group3/connect-four/src/scripts/connect_four_panel_gui.py
+Path=/home/project26-group3/connect-four
+Terminal=false
+StartupNotify=true
+Icon=applications-utilities
+Categories=Utility;
