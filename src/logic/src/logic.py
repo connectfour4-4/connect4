@@ -5,6 +5,7 @@ import numpy as np
 import threading
 import time
 from std_msgs.msg import Int8MultiArray, Int8, String
+import random
 
 ROWS = 6
 COLS = 7
@@ -18,18 +19,20 @@ class GameLogic:
     def __init__(self):
         rospy.init_node("game_logic")
 
+        # Change here to easy, medium, hard, impossible. Recommended medium or hard.
         self.depth = int(rospy.get_param("~depth", 4))
+        self.difficulty = rospy.get_param("~difficulty", "impossible")
         self.human_starts = bool(rospy.get_param("~human_starts", True))
 
-        # Used only as a tie-breaker if both normal and flipped boards look valid.
+        # Internal board convention:
+        # row 0 = top
+        # row 5 = bottom
+        #
+        # This is required for Connect4 gravity/minimax logic.
         self.flip_board = bool(rospy.get_param("~flip_board", False))
-
-        # If true, parse_board will test both normal and flipped board orientation.
         self.auto_detect_flip = bool(rospy.get_param("~auto_detect_flip", True))
 
         self.next_move_topic = rospy.get_param("~next_move_topic", "/robot_next_move")
-
-        # Sawyer speech topic
         self.say_topic = rospy.get_param("~say_topic", "/say")
 
         self.board = np.zeros((ROWS, COLS), dtype=np.int8)
@@ -68,6 +71,21 @@ class GameLogic:
         rospy.loginfo(f"[connect4_game_logic] AI search depth: {self.depth}")
         rospy.loginfo(f"[connect4_game_logic] auto_detect_flip={self.auto_detect_flip}")
         rospy.loginfo(f"[connect4_game_logic] flip_board tie-breaker={self.flip_board}")
+
+    def physical_row(self, internal_row):
+        """
+        Internal board convention:
+            row 0 = top
+            row 5 = bottom
+
+        Physical/display convention:
+            row 0 = bottom
+            row 5 = top
+
+        This should only be used for logging/display.
+        Do not use this for minimax, gravity, dropping pieces, or win checking.
+        """
+        return (ROWS - 1) - int(internal_row)
 
     def say(self, text):
         rospy.loginfo(f"[connect4_game_logic] SAY: {text}")
@@ -123,6 +141,25 @@ class GameLogic:
         msg = (
             f"\n================ {title} ================\n"
             f"{board}\n"
+            f"=========================================\n"
+        )
+        print(msg, flush=True)
+        rospy.loginfo(msg)
+
+    def terminal_log_board_with_physical_rows(self, title, board):
+        """
+        Logs board both ways:
+        - internal array, where row 0 is top
+        - physical view, where displayed row 0 is bottom
+        """
+        physical_view = np.flipud(board)
+
+        msg = (
+            f"\n================ {title} ================\n"
+            f"Internal board, row 0 = top, row {ROWS - 1} = bottom:\n"
+            f"{board}\n\n"
+            f"Physical display, row 0 = bottom, row {ROWS - 1} = top:\n"
+            f"{physical_view}\n"
             f"=========================================\n"
         )
         print(msg, flush=True)
@@ -204,7 +241,6 @@ class GameLogic:
                 )
 
                 self.say("New game started.")
-
                 self.handle_position()
             else:
                 rospy.loginfo_throttle(
@@ -214,7 +250,10 @@ class GameLogic:
 
             return
 
-        self.terminal_log_board("LOGIC: VALID BOARD RECEIVED FROM VISION", new_board)
+        self.terminal_log_board_with_physical_rows(
+            "LOGIC: VALID BOARD RECEIVED FROM VISION",
+            new_board
+        )
 
         if not self.have_board:
             self.board = new_board
@@ -236,12 +275,17 @@ class GameLogic:
             player, row, col = move_info
             who = "HUMAN / BLUE" if player == HUMAN else "ROBOT / RED"
 
+            physical_row = self.physical_row(row)
+
             self.terminal_log(
                 "LOGIC: MOVE DETECTED FROM VISION",
-                f"Detected move by: {who}\nrow={row}\ncol={col}"
+                f"Detected move by: {who}\n"
+                f"internal row={row}\n"
+                f"physical row={physical_row}\n"
+                f"col={col}"
             )
         else:
-            self.terminal_log_board("LOGIC: BOARD CHANGED", new_board)
+            self.terminal_log_board_with_physical_rows("LOGIC: BOARD CHANGED", new_board)
 
         if self.robot_command_pending:
             old_robot_count = int(np.count_nonzero(old_board == ROBOT))
@@ -383,7 +427,7 @@ class GameLogic:
                 elif seen_empty:
                     rospy.logwarn(
                         f"[connect4_game_logic] Invalid gravity in column {c}. "
-                        f"Piece at row {r} is floating."
+                        f"Piece at internal row {r}, physical row {self.physical_row(r)} is floating."
                     )
                     return False
 
@@ -553,34 +597,84 @@ class GameLogic:
         self.pending_robot_col = col_zero_based
 
     def choose_best_robot_move(self, board):
-        self.debug_immediate_wins(board)
+        valid = self.valid_moves(board)
 
-        robot_winning_cols = self.find_winning_moves(board, ROBOT)
-        human_winning_cols = self.find_winning_moves(board, HUMAN)
+        if self.difficulty == "easy":
+            if random.random() < 0.65:
+                col = random.choice(valid)
+                return col, 0, "Random easy move"
 
-        if len(robot_winning_cols) > 0:
-            col = robot_winning_cols[0]
-            return col, 1e6, f"Immediate robot winning move at internal col {col}"
+            col, score = self.minimax(
+                board=board,
+                depth=1,
+                alpha=-1e9,
+                beta=1e9,
+                maximizing=True
+            )
 
-        if len(human_winning_cols) > 0:
-            col = human_winning_cols[0]
-            return col, 9e5, f"Immediate block against human winning move at internal col {col}"
+            return col, score, "Easy minimax"
 
-        self.transposition_table.clear()
+        elif self.difficulty == "medium":
+            if random.random() < 0.25:
+                col = random.choice(valid)
+                return col, 0, "Random medium mistake"
 
-        col, score = self.minimax(
-            board=board,
-            depth=self.depth,
-            alpha=-1e9,
-            beta=1e9,
-            maximizing=True
-        )
+            col, score = self.minimax(
+                board=board,
+                depth=3,
+                alpha=-1e9,
+                beta=1e9,
+                maximizing=True
+            )
 
-        return col, score, "Minimax search"
+            return col, score, "Medium minimax"
+
+        elif self.difficulty == "hard":
+            return self.iterative_deepening(
+                board,
+                max_depth=5,
+                time_limit=1.5
+            )
+
+        else:
+            return self.iterative_deepening(
+                board,
+                max_depth=7,
+                time_limit=4.0
+            )
+
+    def iterative_deepening(self, board, max_depth, time_limit):
+        start = time.time()
+
+        best_col = random.choice(self.valid_moves(board))
+        best_score = -1e9
+        reached_depth = 0
+
+        for depth in range(1, max_depth + 1):
+            if time.time() - start > time_limit:
+                break
+
+            reached_depth = depth
+            self.transposition_table.clear()
+
+            col, score = self.minimax(
+                board=board,
+                depth=depth,
+                alpha=-1e9,
+                beta=1e9,
+                maximizing=True
+            )
+
+            if col is not None:
+                best_col = col
+                best_score = score
+
+        return best_col, best_score, f"Iterative deepening depth={reached_depth}"
 
     def debug_immediate_wins(self, board):
         rospy.logwarn("\n[DEBUG] ===== CHECKING IMMEDIATE WIN THREATS =====")
         rospy.logwarn(f"\n[DEBUG] Current interpreted board:\n{board}")
+        rospy.logwarn(f"\n[DEBUG] Physical display board, row 0 = bottom:\n{np.flipud(board)}")
 
         human_cols = self.find_winning_moves(board, HUMAN)
         robot_cols = self.find_winning_moves(board, ROBOT)
@@ -606,24 +700,8 @@ class GameLogic:
         return [c for c in range(COLS) if board[0, c] == EMPTY]
 
     def ordered_valid_moves(self, board):
-        center = COLS // 2
-        return sorted(self.valid_moves(board), key=lambda c: abs(c - center))
-
-    def safe_robot_moves(self, board):
-        safe = []
-
-        for col in self.ordered_valid_moves(board):
-            child = self.drop(board, col, ROBOT)
-
-            if child is None:
-                continue
-
-            human_can_win = len(self.find_winning_moves(child, HUMAN, verbose=False)) > 0
-
-            if not human_can_win:
-                safe.append(col)
-
-        return safe
+        order = [3, 2, 4, 1, 5, 0, 6]
+        return [c for c in order if board[0, c] == EMPTY]
 
     def drop(self, board, col, player):
         new_board = board.copy()
@@ -660,6 +738,7 @@ class GameLogic:
                         f"Command column would be {col + 1}."
                     )
                     rospy.logwarn(f"\n[DEBUG] Winning simulated board:\n{child}")
+                    rospy.logwarn(f"\n[DEBUG] Physical display winning board:\n{np.flipud(child)}")
 
                 winning_cols.append(col)
 
@@ -706,21 +785,21 @@ class GameLogic:
 
         if player_count == 4:
             score += 1000000
+
         elif player_count == 3 and empty_count == 1:
-            score += 140
+            score += 120
+
         elif player_count == 2 and empty_count == 2:
-            score += 20
-        elif player_count == 1 and empty_count == 3:
-            score += 2
+            score += 15
 
         if opp_count == 4:
             score -= 1000000
+
         elif opp_count == 3 and empty_count == 1:
-            score -= 220
+            score -= 150
+
         elif opp_count == 2 and empty_count == 2:
-            score -= 30
-        elif opp_count == 1 and empty_count == 3:
-            score -= 2
+            score -= 20
 
         return score
 
@@ -762,6 +841,14 @@ class GameLogic:
         score += self.count_potential_threats(board, player) * 60
         score -= self.count_potential_threats(board, opp) * 90
 
+        if self.difficulty in ["hard", "impossible"]:
+            for col in self.valid_moves(board):
+                if self.creates_double_threat(board, col, player):
+                    score += 500
+
+                if self.creates_double_threat(board, col, opp):
+                    score -= 700
+
         return score
 
     def count_potential_threats(self, board, player):
@@ -774,6 +861,20 @@ class GameLogic:
                 count += 1
 
         return count
+
+    def creates_double_threat(self, board, col, player):
+        child = self.drop(board, col, player)
+
+        if child is None:
+            return False
+
+        winning_moves = self.find_winning_moves(
+            child,
+            player,
+            verbose=False
+        )
+
+        return len(winning_moves) >= 2
 
     def minimax(self, board, depth, alpha, beta, maximizing):
         valid = self.ordered_valid_moves(board)
@@ -813,10 +914,19 @@ class GameLogic:
             value = -1e9
             best_col = valid[0]
 
-            safe_moves = self.safe_robot_moves(board)
-            search_moves = safe_moves if len(safe_moves) > 0 else valid
+            if self.difficulty != "easy":
+                for col in valid:
+                    child = self.drop(board, col, ROBOT)
+                    if child is not None and self.check_win(child, ROBOT):
+                        return col, 99999999
 
-            for col in search_moves:
+            if self.difficulty in ["hard", "impossible"]:
+                for col in valid:
+                    child = self.drop(board, col, HUMAN)
+                    if child is not None and self.check_win(child, HUMAN):
+                        return col, 99999998
+
+            for col in valid:
                 child = self.drop(board, col, ROBOT)
 
                 if child is None:

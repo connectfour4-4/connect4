@@ -24,8 +24,8 @@ class VisionNode:
         self.depth_topic = rospy.get_param("~depth_topic", "/camera/aligned_depth_to_color/image_raw")
 
         self.stable_time = float(rospy.get_param("~stable_time", 4.0))
-        self.min_token_depth = float(rospy.get_param("~min_token_depth", 0.05)) # changed from 0.2 to 0.05
-        self.max_token_depth = float(rospy.get_param("~max_token_depth", 2.0))  # added max_token_depth and set it to 2.0
+        self.min_token_depth = float(rospy.get_param("~min_token_depth", 0.05))
+        self.max_token_depth = float(rospy.get_param("~max_token_depth", 2.0))
         self.min_publish_gap = float(rospy.get_param("~min_publish_gap", 2.0))
 
         self.vote_frames = int(rospy.get_param("~vote_frames", 30))
@@ -34,15 +34,15 @@ class VisionNode:
         self.board_history = deque(maxlen=self.vote_frames)
         self.last_filtered_board = np.zeros((ROWS, COLS), dtype=np.int8)
 
-        self.latest_depth = None    # added to store the latest depth from the depth topic
+        self.latest_depth = None
         self.last_candidate_board = None
         self.last_candidate_time = None
         self.last_published_board = None
         self.last_publish_time = None
 
-        self.px_thresh = int(rospy.get_param("~px_thresh", 200))    # increase from 180 to 200, more pixels required to consider a slot occupied
-        self.dominance_margin = int(rospy.get_param("~dominance_margin", 110)) # increase from 90 to 110 color must exceed other color
-        self.min_ratio = float(rospy.get_param("~min_ratio", 0.10)) # changed from 0.08 to 0.10, larger fraction of the slot must match color
+        self.px_thresh = int(rospy.get_param("~px_thresh", 300)) # raise from 200 to 300
+        self.dominance_margin = int(rospy.get_param("~dominance_margin", 110))
+        self.min_ratio = float(rospy.get_param("~min_ratio", 0.15)) # from 0.10 to 0.15
 
         self.warp_cell_px = int(rospy.get_param("~warp_cell_px", 120))
         self.slot_radius_ratio = float(rospy.get_param("~slot_radius_ratio", 0.30))
@@ -50,6 +50,9 @@ class VisionNode:
 
         self.alpha_fill = float(rospy.get_param("~alpha_fill", 0.35))
         self.show_rc = bool(rospy.get_param("~show_rc", False))
+
+        # This now only affects what is sent to /board_state.
+        # Internal detection, voting, and gravity validation stay top-to-bottom.
         self.flip_board = bool(rospy.get_param("~flip_board", False))
 
         self.blur_kernel = int(rospy.get_param("~blur_kernel", 7))
@@ -58,8 +61,8 @@ class VisionNode:
 
         self.lower_red1 = np.array([
             int(rospy.get_param("~red1_h_min", 0)),
-            int(rospy.get_param("~red_s_min", 150)), # changed from 100 to 150 
-            int(rospy.get_param("~red_v_min", 130))      # changed from 80 to 130 
+            int(rospy.get_param("~red_s_min", 150)),
+            int(rospy.get_param("~red_v_min", 130))
         ], dtype=np.uint8)
 
         self.upper_red1 = np.array([
@@ -82,8 +85,8 @@ class VisionNode:
 
         self.lower_blue = np.array([
             int(rospy.get_param("~blue_h_min", 90)),
-            int(rospy.get_param("~blue_s_min", 120)),   # changed from 100 to 120
-            int(rospy.get_param("~blue_v_min", 100))    # changed from 80 to 100
+            int(rospy.get_param("~blue_s_min", 200)), # from 120 to 200
+            int(rospy.get_param("~blue_v_min", 50)) # FROM 50 TO 30
         ], dtype=np.uint8)
 
         self.upper_blue = np.array([
@@ -108,8 +111,6 @@ class VisionNode:
 
         rospy.on_shutdown(self.on_shutdown)
 
-
-
         self.sub = rospy.Subscriber(
             self.image_topic,
             Image,
@@ -118,7 +119,6 @@ class VisionNode:
             buff_size=2**24
         )
 
-        # depth subscriber created for the depth also edited in the depth_callback
         self.depth_sub = rospy.Subscriber(
             self.depth_topic,
             Image,
@@ -203,25 +203,26 @@ class VisionNode:
     def image_callback(self, msg):
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-            with self.frame_lock:   # added that we read depth after we reaf frame
-                depth = None 
+
+            with self.frame_lock:
                 if self.latest_depth is None:
+                    depth = None
                     rospy.logwarn_throttle(5.0, "[vision_node] No depth data received yet.")
                 else:
                     depth = self.latest_depth.copy()
+
         except Exception as e:
             rospy.logerr(f"[vision_node] CV Bridge error: {e}")
             return
 
-        board, overlay_frame = self.detect_board_and_overlay(frame, depth) # added depth so pass it into detect_board_andoverlay()
+        board, overlay_frame = self.detect_board_and_overlay(frame, depth)
 
         with self.state_lock:
             calibrated = self.board_quad is not None
 
         if calibrated:
-            if self.flip_board:
-                board = np.flipud(board)
-
+            # Do NOT flip here.
+            # Voting and gravity validation expect row 0 = top and row ROWS - 1 = bottom.
             filtered_board = self.filter_board_with_votes(board)
 
             if filtered_board is not None:
@@ -244,7 +245,6 @@ class VisionNode:
 
         with self.frame_lock:
             self.latest_depth = depth
-
 
     def filter_board_with_votes(self, board):
         self.board_history.append(board.copy())
@@ -280,6 +280,7 @@ class VisionNode:
         for c in range(COLS):
             seen_empty = False
 
+            # Start at bottom row and move upward.
             for r in range(ROWS - 1, -1, -1):
                 if board[r, c] == 0:
                     seen_empty = True
@@ -336,10 +337,21 @@ class VisionNode:
         ]
 
         msg_out.layout.data_offset = 0
-        msg_out.data = board.flatten().astype(np.int8).tolist()
+
+        # Flip only the message sent to the logic node.
+        # The overlay and internal gravity check remain unchanged.
+        if self.flip_board:
+            board_to_publish = np.flipud(board)
+        else:
+            board_to_publish = board
+
+        msg_out.data = board_to_publish.flatten().astype(np.int8).tolist()
 
         self.pub.publish(msg_out)
         rospy.loginfo("[vision_node] Published stable board to /board_state.")
+
+        if self.flip_board:
+            self.terminal_log_board("VISION: PUBLISHED FLIPPED BOARD", board_to_publish)
 
     def run_ui(self):
         rate = rospy.Rate(60)
@@ -426,14 +438,35 @@ class VisionNode:
             pts = np.array(points, dtype=np.int32)
             cv2.polylines(out, [pts], False, (0, 255, 255), 2)
 
-        cv2.putText(out, "Click 4 OUTER board corners", (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(
+            out,
+            "Click 4 OUTER board corners",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 255),
+            2
+        )
 
-        cv2.putText(out, "Suggested: TL, TR, BR, BL", (10, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.putText(
+            out,
+            "Suggested: TL, TR, BR, BL",
+            (10, 55),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 255),
+            2
+        )
 
-        cv2.putText(out, "Press r to reset, q to quit", (10, 85),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(
+            out,
+            "Press r to reset, q to quit",
+            (10, 85),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2
+        )
 
         return out
 
@@ -442,13 +475,20 @@ class VisionNode:
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel, iterations=2)
         return mask
 
-    def detect_cells_on_warped(self, warped_bgr, warped_depth=None): # added depth as an argument 
+    def detect_cells_on_warped(self, warped_bgr, warped_depth=None):
         if self.blur_kernel > 1:
             warped_bgr = cv2.GaussianBlur(
                 warped_bgr,
                 (self.blur_kernel, self.blur_kernel),
                 0
             )
+                    
+        # CLAHE preprocessing for normalising the board 
+        lab = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8,8))
+        l = clahe.apply(l)
+        warped_bgr = cv2.cvtColor(cv2.merge([l,a,b]), cv2.COLOR_LAB2BGR)
 
         hsv = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2HSV)
 
@@ -480,16 +520,15 @@ class VisionNode:
 
                 cv2.circle(circle_mask, (cx_local, cy_local), radius, 255, -1)
 
-                # Added: Apply depth filtering to mask out pixels not at token depth
                 if warped_depth is not None:
                     depth_roi = warped_depth[y1:y2, x1:x2]
                     depth_valid = (
-                        np.isfinite(depth_roi) &  # Ensure depth is valid (not NaN or inf)
-                        (depth_roi >= self.min_token_depth) &  # Depth within min range
-                        (depth_roi <= self.max_token_depth)    # Depth within max range
+                        np.isfinite(depth_roi) &
+                        (depth_roi >= self.min_token_depth) &
+                        (depth_roi <= self.max_token_depth)
                     )
-                    depth_mask = (depth_valid.astype(np.uint8) * 255)  # Convert to binary mask
-                    circle_mask = cv2.bitwise_and(circle_mask, depth_mask)  # Combine with circle mask
+                    depth_mask = depth_valid.astype(np.uint8) * 255
+                    circle_mask = cv2.bitwise_and(circle_mask, depth_mask)
 
                 valid_area = cv2.countNonZero(circle_mask)
                 if valid_area <= 0:
@@ -572,7 +611,7 @@ class VisionNode:
 
         return board, cell_visuals
 
-    def detect_board_and_overlay(self, frame, depth=None): # added depth as an argument
+    def detect_board_and_overlay(self, frame, depth=None):
         with self.state_lock:
             quad = None if self.board_quad is None else self.board_quad.copy()
 
@@ -596,15 +635,19 @@ class VisionNode:
         M = cv2.getPerspectiveTransform(quad, dst_quad)
         M_inv = cv2.getPerspectiveTransform(dst_quad, quad)
 
-        # warp it if it's the same size as the frame, otherwise set warped_depth to None
         warped = cv2.warpPerspective(frame, M, (warp_w, warp_h))
-        if depth is not None and depth.shape[:2] == frame.shape[:2]:
-            warped_depth = cv2.warpPerspective(depth, M, (warp_w, warp_h),
-                                               flags=cv2.INTER_NEAREST)
-        else: 
-            warped_depth = None 
 
-        board, cell_visuals = self.detect_cells_on_warped(warped, warped_depth) # added warped depth as an argument
+        if depth is not None and depth.shape[:2] == frame.shape[:2]:
+            warped_depth = cv2.warpPerspective(
+                depth,
+                M,
+                (warp_w, warp_h),
+                flags=cv2.INTER_NEAREST
+            )
+        else:
+            warped_depth = None
+
+        board, cell_visuals = self.detect_cells_on_warped(warped, warped_depth)
 
         overlay = frame.copy()
         projected_visuals = []
@@ -635,9 +678,21 @@ class VisionNode:
                 }
             )
 
-        out = cv2.addWeighted(overlay, self.alpha_fill, frame, 1.0 - self.alpha_fill, 0)
+        out = cv2.addWeighted(
+            overlay,
+            self.alpha_fill,
+            frame,
+            1.0 - self.alpha_fill,
+            0
+        )
 
-        cv2.polylines(out, [np.round(quad).astype(np.int32)], True, (0, 255, 255), 2)
+        cv2.polylines(
+            out,
+            [np.round(quad).astype(np.int32)],
+            True,
+            (0, 255, 255),
+            2
+        )
 
         for vis in projected_visuals:
             cv2.polylines(out, [vis["cell_poly"]], True, (0, 255, 0), 1)
@@ -668,14 +723,35 @@ class VisionNode:
                     1
                 )
 
-        cv2.putText(out, "Stable mode: voting + continuous publish",
-                    (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(
+            out,
+            "Stable mode: voting + continuous publish",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2
+        )
 
-        cv2.putText(out, "R=1 red, B=2 blue, .=0 empty",
-                    (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+        cv2.putText(
+            out,
+            "R=1 red, B=2 blue, .=0 empty",
+            (10, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2
+        )
 
-        cv2.putText(out, "Press r to recalibrate, q to quit",
-                    (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+        cv2.putText(
+            out,
+            "Press r to recalibrate, q to quit",
+            (10, 75),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2
+        )
 
         return board, out
 

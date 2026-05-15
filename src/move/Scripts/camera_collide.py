@@ -14,7 +14,7 @@ def main():
     table_pose.pose.position.y = 0.0
     table_pose.pose.position.z = -0.19
     table_pose.pose.orientation.w = 1.0
-    psi.add_box("table", pose=table_pose, size=(0.25, 0.25, 0.25))
+    psi.add_box("box", pose=table_pose, size=(0.25, 0.25, 0.25))
 
     table_pose = geometry_msgs.msg.PoseStamped()
     table_pose.header.frame_id = "base"
