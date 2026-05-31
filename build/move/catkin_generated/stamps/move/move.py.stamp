@@ -15,7 +15,7 @@ rospy.init_node('move_sawyer',anonymous=True)
 robot = moveit_commander.RobotCommander()
 scene = moveit_commander.PlanningSceneInterface()
 
-group_name = "arm"
+group_name = "arm_local"
 group = moveit_commander.MoveGroupCommander(group_name)
 
 move_done_pub = rospy.Publisher("/robot/move_done", Bool, queue_size=10)
