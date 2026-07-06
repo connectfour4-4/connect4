@@ -34,4 +34,8 @@ scripts:
   - label: Close Gripper
     script: close-gripper.sh
     group: Connect Four
-    tooltip: Close the gripper.
+    tooltip: Move home.
+  - label: Home
+    script: home.sh
+    group: Connect Four
+    tooltip: Move to home pose

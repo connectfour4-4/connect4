@@ -135,6 +135,9 @@ def place_column(group, gripper_pub, column):
     rospy.loginfo("[panel_motion] Returning home.")
     move(group, HOME)
 
+def move_home():
+    move(HOME)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Connect Four ScriptPanel robot motions.")
@@ -163,7 +166,8 @@ def main():
         place_column(group, gripper_pub, args.column)
     elif args.command == "pick":
         pick_from_feeder(group, gripper_pub, args.wait)
-
+    elif args.command == "Home":
+        move_home()
     rospy.loginfo("[panel_motion] Done.")
 
 
